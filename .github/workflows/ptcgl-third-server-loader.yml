@@ -31,5 +31,5 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: manager-macos
+          name: ptcgl-third-server-loader-macos
           path: ${{ runner.temp }}/code/dist
