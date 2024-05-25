@@ -23,9 +23,9 @@ jobs:
           curl --connect-timeout 3 --fail --location --output code.zip ${{ inputs.url }}
           mkdir code
           unzip -d code code.zip
-          cd code
       - name: Build
         run: |
+          cd "$RUNNER_TEMP/code"
           yarn install
           yarn run dist-macos-x64
       - name: Upload
