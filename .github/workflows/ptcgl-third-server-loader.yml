@@ -17,8 +17,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20.11.1'
-      - name: Install dependencies
-        run: sudo apt -y install unzip
       - name: Download source code
         run: |
           cd "$RUNNER_TEMP"
@@ -27,7 +25,9 @@ jobs:
           unzip -d code code.zip
           cd code
       - name: Build
-        run: yarn run dist-macos-x64
+        run: |
+          yarn install
+          yarn run dist-macos-x64
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
