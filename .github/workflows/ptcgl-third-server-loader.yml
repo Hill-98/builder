@@ -2,10 +2,11 @@ name: Build ptcgl-third-server-loader
 
 on:
   workflow_dispatch:
-    url:
-      description: 'Source code download url'
-      required: true
-      type: string
+    inputs:
+      url:
+        description: 'Source code download url'
+        required: true
+        type: string
 
 jobs:
   build-on-macos:
