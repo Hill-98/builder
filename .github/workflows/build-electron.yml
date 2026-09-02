@@ -1,0 +1,307 @@
+name: Build Custom Electron
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ELECTRON_REPOSITORY: Hill-98/electron
+  ELECTRON_BRANCH: fuse-node-stdio-initialization
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Windows x64
+  # --------------------------------------------------------------------------
+  windows-x64:
+    name: Windows x64
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+
+    env:
+      BUILD_ROOT: C:\electron-build
+
+      # Electron / Chromium 官方建议 Windows 使用本机 VS 工具链时设置这个变量
+      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
+
+    steps:
+      - name: Configure Git
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Electron build tools
+        shell: cmd
+        run: npm install --global @electron/build-tools
+
+      - name: Initialize Electron checkout
+        shell: cmd
+        run: |
+          e init ci-release ^
+            --root="%BUILD_ROOT%" ^
+            --import=release ^
+            --target-cpu=x64 ^
+            --remote-build=none ^
+            --use-https ^
+            --fork=%ELECTRON_REPOSITORY%
+
+      - name: Checkout fork branch
+        shell: cmd
+        run: |
+          cd /d "%BUILD_ROOT%\src\electron"
+
+          git fetch fork "%ELECTRON_BRANCH%"
+          git checkout -B "%ELECTRON_BRANCH%" "fork/%ELECTRON_BRANCH%"
+
+      - name: Sync Chromium / Node dependencies
+        shell: cmd
+        run: |
+          e sync
+
+      # 显式保证第一个版本的 fuse 为 Enabled。
+      - name: Enable node_stdio_initialization fuse
+        shell: pwsh
+        run: |
+          $path = "$env:BUILD_ROOT\src\electron\build\fuses\fuses.json5"
+
+          $content = Get-Content -Raw $path
+
+          $content = $content -replace `
+            '"node_stdio_initialization"\s*:\s*"[01]"', `
+            '"node_stdio_initialization": "1"'
+
+          Set-Content -Path $path -Value $content -NoNewline
+
+          Get-Content $path
+
+      - name: Build Windows x64 - fuse enabled
+        shell: cmd
+        run: |
+          e build --target electron:electron_dist_zip
+
+      - name: Save enabled artifact
+        shell: pwsh
+        run: |
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "$env:GITHUB_WORKSPACE\artifacts"
+
+          Copy-Item `
+            "$env:BUILD_ROOT\src\out\Release\dist.zip" `
+            "$env:GITHUB_WORKSPACE\artifacts\electron-win32-x64-node-stdio-enabled.zip"
+
+      # 只修改 fuse wire 的默认值。
+      # Ninja 下一次执行时只重新构建受这个输入影响的 target。
+      - name: Disable node_stdio_initialization fuse
+        shell: pwsh
+        run: |
+          $path = "$env:BUILD_ROOT\src\electron\build\fuses\fuses.json5"
+
+          $content = Get-Content -Raw $path
+
+          $content = $content -replace `
+            '"node_stdio_initialization"\s*:\s*"[01]"', `
+            '"node_stdio_initialization": "0"'
+
+          Set-Content -Path $path -Value $content -NoNewline
+
+          Get-Content $path
+
+      - name: Build Windows x64 - fuse disabled
+        shell: cmd
+        run: |
+          e build --target electron:electron_dist_zip
+
+      - name: Save disabled artifact
+        shell: pwsh
+        run: |
+          Copy-Item `
+            "$env:BUILD_ROOT\src\out\Release\dist.zip" `
+            "$env:GITHUB_WORKSPACE\artifacts\electron-win32-x64-node-stdio-disabled.zip"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-windows-x64
+          compression-level: 0
+          retention-days: 7
+          path: |
+            artifacts/electron-win32-x64-node-stdio-enabled.zip
+            artifacts/electron-win32-x64-node-stdio-disabled.zip
+
+
+  # --------------------------------------------------------------------------
+  # macOS Apple Silicon / ARM64
+  # --------------------------------------------------------------------------
+  macos-arm64:
+    name: macOS ARM64
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+
+    env:
+      BUILD_ROOT: ${{ github.workspace }}/electron-build
+
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Electron build tools
+        shell: bash
+        run: |
+          npm install --global @electron/build-tools
+
+      - name: Initialize Electron checkout
+        shell: bash
+        run: |
+          e init ci-release \
+            --root="$BUILD_ROOT" \
+            --import=release \
+            --target-cpu=arm64 \
+            --remote-build=none \
+            --use-https \
+            --fork="$ELECTRON_REPOSITORY"
+
+      - name: Checkout fork branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$BUILD_ROOT/src/electron"
+
+          git fetch fork "$ELECTRON_BRANCH"
+          git checkout -B "$ELECTRON_BRANCH" "fork/$ELECTRON_BRANCH"
+
+      - name: Sync Chromium / Node dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          e sync
+
+      - name: Enable node_stdio_initialization fuse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import os
+
+          path = (
+              Path(os.environ["BUILD_ROOT"])
+              / "src"
+              / "electron"
+              / "build"
+              / "fuses"
+              / "fuses.json5"
+          )
+
+          text = path.read_text()
+
+          text, count = re.subn(
+              r'"node_stdio_initialization"\s*:\s*"[01]"',
+              '"node_stdio_initialization": "1"',
+              text,
+          )
+
+          if count != 1:
+              raise RuntimeError(
+                  f"Expected exactly one node_stdio_initialization fuse, got {count}"
+              )
+
+          path.write_text(text)
+          PY
+
+          cat "$BUILD_ROOT/src/electron/build/fuses/fuses.json5"
+
+      - name: Build macOS ARM64 - fuse enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          e build --target electron:electron_dist_zip
+
+      - name: Save enabled artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+
+          cp \
+            "$BUILD_ROOT/src/out/Release/dist.zip" \
+            "$GITHUB_WORKSPACE/artifacts/electron-darwin-arm64-node-stdio-enabled.zip"
+
+      - name: Disable node_stdio_initialization fuse
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import os
+
+          path = (
+              Path(os.environ["BUILD_ROOT"])
+              / "src"
+              / "electron"
+              / "build"
+              / "fuses"
+              / "fuses.json5"
+          )
+
+          text = path.read_text()
+
+          text, count = re.subn(
+              r'"node_stdio_initialization"\s*:\s*"[01]"',
+              '"node_stdio_initialization": "0"',
+              text,
+          )
+
+          if count != 1:
+              raise RuntimeError(
+                  f"Expected exactly one node_stdio_initialization fuse, got {count}"
+              )
+
+          path.write_text(text)
+          PY
+
+          cat "$BUILD_ROOT/src/electron/build/fuses/fuses.json5"
+
+      - name: Build macOS ARM64 - fuse disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          e build --target electron:electron_dist_zip
+
+      - name: Save disabled artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp \
+            "$BUILD_ROOT/src/out/Release/dist.zip" \
+            "$GITHUB_WORKSPACE/artifacts/electron-darwin-arm64-node-stdio-disabled.zip"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-macos-arm64
+          compression-level: 0
+          retention-days: 7
+          path: |
+            artifacts/electron-darwin-arm64-node-stdio-enabled.zip
+            artifacts/electron-darwin-arm64-node-stdio-disabled.zip
